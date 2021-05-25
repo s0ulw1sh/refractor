@@ -1,0 +1,17 @@
+{
+    "styles":   [],
+    "scripts":  [],
+    "optimize": true,
+    "websocket": "/_api/ws",
+    "apipath": "/_api",
+    "apilist": [
+        {
+            "path"   : "GET::/user/test",
+            "call"   : "User.Test",
+            "result" : {"hello":"world"}
+        }
+    ],
+    "commands": {
+        "build": [ "ls" ]
+    } 
+}

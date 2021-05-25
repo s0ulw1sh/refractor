@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WS TEST</title>
+</head>
+<body>
+    <div>Open Console</div>
+    <script>
+        var socket = new WebSocket('ws://localhost:8000/_api/ws');
+
+        socket.addEventListener('open', function (event) {
+            console.log('connected to ws');
+
+            socket.send('{"jsonrpc": "2.0", "method": "User.Test", "params": [], "id": 1}');
+        });
+
+        socket.addEventListener('close', function (event) {
+            console.log('disconnect');
+        });
+
+        socket.addEventListener('error', function (event) {
+            console.log('error', event);
+        });
+
+        socket.addEventListener('message', function (event) {
+            console.log('Message from server', JSON.parse(event.data));
+        });
+
+    </script>
+</body>
+</html>

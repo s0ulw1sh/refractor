@@ -1,0 +1,660 @@
+#!/usr/bin/python3
+
+__author__    = "Pavel Rid aka Soulwish"
+__copyright__ = "Copyright (C) 2021 Pavel Rid | https://github.com/s0ulw1sh/refractor"
+__license__   = "GPLv3 (GNU General Public License Version 3)"
+__version__   = "1.0.0"
+
+import sys
+import os
+import json
+import argparse
+import logging
+import subprocess
+from http.server import SimpleHTTPRequestHandler, HTTPServer
+from base64 import standard_b64encode
+from hashlib import sha1
+
+def defaultElmHtmlTemplate():
+    return '''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    {styles}
+</head>
+<body>
+    <pre id="elm-mount"></pre>
+    {elmscript}
+    <script>
+        {elmcode}
+    </script>
+    {scripts}
+</body>
+</html>
+    '''
+
+class Refractor(SimpleHTTPRequestHandler):
+
+    args    = {}
+    protocol_version = "HTTP/1.1"
+    
+    WS_MAGICK       = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+    WS_OPC_CONTINUE = 0x0
+    WS_OPC_TEXT     = 0x1
+    WS_OPC_BIN      = 0x2
+    WS_OPC_CLOSE    = 0x8
+    WS_OPC_PING     = 0x9
+    WS_OPC_PONG     = 0xa
+
+    def __init__(self, request=None, client_address=None, server=None):
+        if request != None:
+            super().__init__(request, client_address, server)
+        else:
+            logging.basicConfig(
+                level=logging.INFO,
+                format='%(asctime)s [%(levelname)s] : %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S')
+
+            cli = argparse.ArgumentParser(
+                                description='Refractor web server for Elm project')
+            cli.add_argument('-H', '--host',
+                                help     = 'The host of the server (localhost)',
+                                required = False,
+                                default  = 'localhost')
+            cli.add_argument('-P', '--port',
+                                help = 'The port of the server (8000)',
+                                required = False,
+                                default = 8000)
+            cli.add_argument('-T', '--template',
+                                help = 'HTML template',
+                                required = False,
+                                default = '')
+            cli.add_argument('-C', '--cmd',
+                                help = 'Command',
+                                required = False,
+                                default = '')
+
+            self.args      = cli.parse_args()
+            self.args.cwd  = os.getcwd()
+            self.args.cfg  = {}
+            self.args.http = {}
+            self.args.rpc  = {}
+
+            elmstuffdir = os.path.join(self.args.cwd, 'elm-stuff')
+
+            if not os.path.isdir(elmstuffdir):
+                try:
+                    os.mkdir(elmstuffdir)
+                except OSError:
+                    logging.error("creation of the directory `elm-stuff` failed")
+                    sys.exit(-1)
+                except Exception as e:
+                    logging.error(e)
+                    sys.exit(-1)
+
+            jsonrefract    = os.path.join(self.args.cwd, 'refract.json')
+
+            if os.path.isfile(jsonrefract):
+                try:
+                    with open(jsonrefract) as f:
+                        self.args.cfg = json.load(f)
+                        f.close()
+                except IOError:
+                    logging.error('refract.json not accessible')
+                except Exception as e:
+                    logging.error(e)
+                    sys.exit(-1)
+            else:
+                return
+
+            if self.args.cmd != '':
+                cwd  = os.getcwd()
+                code = self.runCommand(self.args.cmd)
+                os.chdir(cwd)
+                sys.exit(code)
+
+            if 'apilist' in self.args.cfg and isinstance(self.args.cfg['apilist'], list):
+                for item in self.args.cfg['apilist']:
+                    if isinstance(item, dict) and 'result' in item:
+                        
+                        if 'call' in item and isinstance(item['call'], str):
+                            self.args.rpc[item['call']] = item['result']
+
+                        if 'path' in item and isinstance(item['path'], str):
+                            try:
+                                methods, path = item['path'].split('::', maxsplit=2)
+                                methods = methods.split(',')
+                            except:
+                                path    = item['path']
+                                methods = ['ANY']
+
+                            self.args.http[path.strip('/')] = {
+                                'methods' : list(map(self.httpMethodToIndex, methods)),
+                                'result'  : item['result']
+                            }
+
+    def runCommand(self, cmd):
+
+        if 'commands' in self.args.cfg and isinstance(self.args.cfg['commands'], dict):
+            if cmd in self.args.cfg['commands']:
+                if isinstance(self.args.cfg['commands'][cmd], list) and len(self.args.cfg['commands'][cmd]) > 0:
+                    if isinstance(self.args.cfg['commands'][cmd][0], str):
+                        try:
+                            out = subprocess.run(self.args.cfg['commands'][cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                        except Exception as e:
+                            logging.error(e)
+                            return -1
+
+                        print(out.stdout.decode('utf-8'))
+
+                        return out.returncode
+                    
+                    elif isinstance(self.args.cfg['commands'][cmd][0], list):
+                        output  = []
+                        code    = 0
+                        
+                        for item in self.args.cfg['commands'][cmd]:
+                            try:
+                                out = subprocess.run(item, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            except Exception as e:
+                                logging.error(e)
+                                return -1
+
+                            output.append(out.stdout.decode('utf-8'))
+
+                            code = out.returncode
+
+                            if code != 0:
+                                break
+
+                        print('\n'.join(output))
+                        return code
+
+        logging.info('command `{}` not found'.format(cmd))
+        return 0
+
+    def runServer(self):
+
+        with HTTPServer((self.args.host, self.args.port), Refractor) as httpd:
+            httpd.allow_reuse_address = True
+            httpd.args                = self.args
+
+            logging.info('Starting refractor web server {}:{}\n'.format(self.args.host, self.args.port))
+
+            try:
+                httpd.serve_forever()
+            except KeyboardInterrupt:
+                pass
+            except Exception as e:
+                logging.error(e)
+
+            httpd.server_close()
+            logging.info('Stopping refractor web server\n')
+
+
+     ##  ## ###### ###### ####
+     ##  ## # ## #   ##    ##
+     ##  ##   ##     ##    ##
+     ##  ##   ##     ##    ##
+     ##  ##   ##     ##    ##   #
+     ##  ##   ##     ##    ##  ##
+      ####   ####  ###### #######
+
+    def httpDisableCache(self):
+        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        
+    def httpNotFound(self, message):
+        self.send_response(404)
+        self.send_header('Content-type', 'text/plain')
+        self.httpDisableCache()
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(message)
+
+    def httpInternalError(self, message):
+        self.send_response(500)
+        self.send_header('Content-type', 'text/plain')
+        self.httpDisableCache()
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(message)
+
+    def httpSendJson(self, data):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.httpDisableCache()
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode('utf-8'))
+
+    def validPath(self, path):
+        return len(path.strip().strip('/')) > 0
+
+    def httpMethodToIndex(self, method):
+        return {
+            'ANY'    : 0,
+            'GET'    : 1,
+            'POST'   : 2,
+            'PUT'    : 3,
+            'PATCH'  : 4,
+            'DELETE' : 5
+        }.get(method.upper(), 0)
+
+
+      ####  ##  ## #######  #### ###  ##
+     ##  ## ##  ##  ##   # ##  ## ##  ##
+    ##      ##  ##  ## #  ##      ## ##
+    ##      ######  ####  ##      ####
+    ##      ##  ##  ## #  ##      ## ##
+     ##  ## ##  ##  ##   # ##  ## ##  ##
+      ####  ##  ## #######  #### ###  ##
+
+    def httpCheckApi(self, method='GET'):
+        apipath = '/_api'
+
+        if 'apipath' in self.server.args.cfg:
+            if isinstance(self.server.args.cfg['apipath'], str) and self.validPath(self.server.args.cfg['apipath']):
+                apipath = self.server.args.cfg['apipath']
+            elif isinstance(self.server.args.cfg['apipath'], bool):
+                if self.server.args.cfg['apipath'] == False:
+                    return False
+
+        if self.path.startswith(apipath) and self.path != apipath:
+            path = self.path.strip('/').strip(apipath)
+            if path in self.server.args.http:
+                method = self.httpMethodToIndex(method)
+                if 0 in self.server.args.http[path]['methods'] or method in self.server.args.http[path]['methods']:
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.httpDisableCache()
+                    self.send_header('Connection', 'close')
+                    self.end_headers()
+                    self.wfile.write(json.dumps(self.server.args.http[path]['result']).encode('utf-8'))
+                else:
+                    self.httpNotFound('Not Found'.encode('utf-8'))
+            else:
+                self.httpNotFound('Not Found'.encode('utf-8'))
+
+            return True
+        else:
+            return False
+
+    def wsCheckApi(self):
+        wspath = '/_api/ws'
+
+        if 'websocket' in self.server.args.cfg:
+            if isinstance(self.server.args.cfg['websocket'], str) and self.validPath(self.server.args.cfg['websocket']):
+                wspath = self.server.args.cfg['websocket']
+            elif isinstance(self.server.args.cfg['websocket'], bool):
+                if self.server.args.cfg['websocket'] == False:
+                    return False
+
+        if wspath == self.path:
+            upgrade = self.headers.get('Upgrade', None)
+
+            if upgrade and upgrade.lower().strip() == 'websocket':
+                self.wsHandshake()
+                self.wsReadMessages()
+                return True
+            else:
+                self.httpNotFound('Not Found'.encode('utf-8'))
+                return True
+
+        return False
+
+    def rpcCheckApi(self):
+        rpcpath = '/_api/rpc'
+
+        if 'rpc' in self.server.args.cfg:
+            if isinstance(self.server.args.cfg['rpc'], str) and self.validPath(self.server.args.cfg['rpc']):
+                rpcpath = self.server.args.cfg['rpc']
+            elif isinstance(self.server.args.cfg['rpc'], bool):
+                if self.server.args.cfg['rpc'] == False:
+                    return False
+
+        if rpcpath == self.path:
+            cnlen = int(self.headers.get('Content-Length', 0))
+            
+            if cnlen == 0:
+                self.httpInternalError('Invalid content length'.encode('utf-8'))
+                return True
+
+            post_data = self.rfile.read(cnlen).decode('utf-8')
+
+            try:
+                rpcreq = json.loads(post_data)
+            except Exception as e:
+                rpcreq = False
+
+            if not isinstance(rpcreq, dict) or rpcreq.get('id', None) is None:
+                self.httpSendJson({
+                    'jsonrpc' : '2.0',
+                    'id'      : None,
+                    'error'   : {'code': -32700, 'message':'Parse error'}
+                })
+                return True
+
+            callid = rpcreq.get('id')
+            method = rpcreq.get('method', None)
+
+            if not isinstance(method, str) or method == '' or method not in self.server.args.rpc:
+                self.httpSendJson({
+                    'jsonrpc' : '2.0',
+                    'id'      : callid,
+                    'error'   : {'code': -32601, 'message':'Method not found'}
+                })
+                return True
+
+            self.httpSendJson({
+                'jsonrpc' : '2.0',
+                'id'      : callid,
+                'result'  : self.server.args.rpc[method]
+            })
+
+            return True
+
+        return False
+
+
+    def elmCheck(self):
+        elmbasename  = os.path.basename(self.path)
+        elmname, ext = os.path.splitext(elmbasename)
+
+        if ext.lower() != '.elm':
+            return False
+
+        elmpath = os.path.join(self.server.args.cwd, self.path.strip('/'))
+        
+        if not os.path.isfile(elmpath):
+            self.httpNotFound("Elm File Not Found {}".format(self.path).encode('utf-8'))
+            return True
+
+        elmcmd = 'elm'
+
+        if 'elm' in self.server.args.cfg:
+            if isinstance(self.server.args.cfg['elm'], str):
+                elmcmd = self.server.args.cfg['elm']
+
+        command = [elmcmd, 'make', elmpath]
+
+        if 'optimize' in self.server.args.cfg:
+            if type(self.server.args.cfg['optimize']) == type(True) and self.server.args.cfg['optimize'] == True:
+                command.append('--optimize')
+
+        jsoutname = self.path.strip('/').replace('/', '_') + '.js'
+        jsoutpath = os.path.join(self.server.args.cwd, 'elm-stuff', jsoutname)
+
+        command.append('--output')
+        command.append(jsoutpath)
+
+        try:
+            out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        except Exception as e:
+            self.httpInternalError(str(e).encode('utf-8'))
+            return True
+
+        if out.returncode != 0:
+            self.httpInternalError(out.stdout)
+            return True
+
+        template = self.server.args.template
+
+        if 'template' in self.server.args.cfg and isinstance(self.server.args.cfg['template'], str):
+            if self.server.args.cfg['template'] != '':
+                template = self.server.args.cfg['template']
+
+        tmpdate = ''
+
+        if template != '':
+            if not template.startswith('/'):
+                template = os.path.join(self.server.args.cwd, template)
+
+            if os.path.isfile(template):
+                try:
+                    with open(template) as f:
+                        tmpdate = f.read()
+                        f.close()
+                except IOError:
+                    logging.error('{} not accessible'.format(template))
+                    sys.exit(-1)
+                except Exception as e:
+                    logging.error(e)
+                    sys.exit(-1)
+        else:
+            tmpdate = defaultElmHtmlTemplate()
+
+        styles  = []
+        scripts = []
+
+        if 'styles' in self.server.args.cfg:
+            if isinstance(self.server.args.cfg['styles'], list):
+                styles = self.server.args.cfg['styles'].copy()
+
+        if 'scripts' in self.server.args.cfg:
+            if isinstance(self.server.args.cfg['scripts'], list):
+                scripts = self.server.args.cfg['scripts'].copy()
+
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.httpDisableCache()
+        self.end_headers()
+        
+        self.wfile.write(tmpdate.format(scripts = '\n'.join(scripts),
+            styles    = '\n'.join(styles),
+            title     = elmbasename,
+            elmscript = '<script src="/elm-stuff/{}"></script>'.format(jsoutname),
+            elmcode   = 'var elmapp = Elm.'+elmname+'.init( {node: document.getElementById("elm-mount")} );').encode('utf-8'))
+
+    ##  ## ###### ###### ######
+    ##  ## # ## # # ## #  ##  ##
+    ##  ##   ##     ##    ##  ##
+    ######   ##     ##    #####
+    ##  ##   ##     ##    ##
+    ##  ##   ##     ##    ##
+    ##  ##  ####   ####  ####
+
+    def do_GET(self):
+        self.path = self.path.split('?')[0]
+
+        if self.wsCheckApi():
+            return
+
+        if self.httpCheckApi('GET'):
+            return
+
+        if self.elmCheck():
+            return
+
+        super().do_GET()
+
+
+    def do_POST(self):
+        self.path = self.path.split('?')[0]
+
+        if self.rpcCheckApi():
+            return
+
+        if self.httpCheckApi('POST'):
+            return
+
+        self.httpNotFound('Not Found')
+
+    def do_PUT(self):
+        self.path = self.path.split('?')[0]
+
+        if self.httpCheckApi('PUT'):
+            return
+
+        self.httpNotFound('Not Found')
+
+    def do_PATCH(self):
+        self.path = self.path.split('?')[0]
+
+        if self.httpCheckApi('PATCH'):
+            return
+
+        self.httpNotFound('Not Found')
+
+    def do_DELETE(self):
+        self.path = self.path.split('?')[0]
+
+        if self.httpCheckApi('DELETE'):
+            return
+
+        self.httpNotFound('Not Found')
+
+    ##   ## ####### ######   ####    ###     #### ###  ## ####### ######
+    ##   ##  ##   #  ##  ## ##  ##  ## ##   ##  ## ##  ##  ##   # # ## #
+    ##   ##  ## #    ##  ## ##     ##   ## ##      ## ##   ## #     ##
+    ## # ##  ####    #####   ####  ##   ## ##      ####    ####     ##
+    #######  ## #    ##  ##     ## ##   ## ##      ## ##   ## #     ##
+    ### ###  ##   #  ##  ## ##  ##  ## ##   ##  ## ##  ##  ##   #   ##
+    ##   ## ####### ######   ####    ###     #### ###  ## #######  ####
+
+    def wsHandshake(self):
+        headers = self.headers
+
+        key = bytes(headers['Sec-WebSocket-Key'], "utf-8") + bytes(self.WS_MAGICK, "utf-8")
+        key = sha1(key).digest()
+        key = standard_b64encode(key)
+
+        try:
+            self.send_response(101, 'Switching Protocols')
+            self.send_header('Upgrade', 'websocket')
+            self.send_header('Connection', 'Upgrade')
+            self.send_header('Sec-WebSocket-Accept', key.decode("utf-8", "ignore"))
+            self.end_headers()
+        except Exception as e:
+            return
+
+        self.wsconnect = True
+
+    def wsReadMessages(self):
+        while self.wsconnect == True:
+            try:
+                self.wsNextMessage()
+            except Exception as e:
+                logging.error(e)
+                self.wsClose()
+
+    def wsNextMessage(self):
+        try:
+            self.opcode = ord(self.rfile.read(1)) & 0x0F
+            msglen      = ord(self.rfile.read(1)) & 0x7F
+
+            if msglen == 126:
+                msglen = struct.unpack(">H", self.rfile.read(2))[0]
+            elif msglen == 127:
+                msglen = struct.unpack(">Q", self.rfile.read(8))[0]
+
+            masks   = [byte for byte in self.rfile.read(4)]
+            decoded = ''
+
+            for char in self.rfile.read(msglen):
+                decoded += chr(char ^ masks[len(decoded) % 4])
+
+            self.message = []
+            self.wsOnMessage(decoded)
+        except Exception as e:
+            if self.wsconnect:
+                raise Exception(e)
+
+    def wsOnMessage(self, message):
+        if self.opcode == self.WS_OPC_CLOSE:
+            self.wsconnect = False
+            try:
+                self.wsSendClose()
+            except:
+                pass
+        elif self.opcode == self.WS_OPC_PING:
+            self.wsSendMessage(self.WS_OPC_PONG, message)
+        elif self.opcode == self.WS_OPC_PONG:
+            pass
+        elif self.opcode == self.WS_OPC_BIN:
+            self.message = []
+        elif self.opcode == self.WS_OPC_CONTINUE:
+            self.message.append(message)
+        elif self.opcode == self.WS_OPC_TEXT:
+            self.message.append(message)
+            
+            try:
+                rpcreq = json.loads(''.join(self.message))
+            except Exception as e:
+                rpcreq = False
+
+            if not isinstance(rpcreq, dict) or rpcreq.get('id', None) is None:
+                self.wsSendJsonMessage(self.WS_OPC_TEXT, {
+                    'jsonrpc' : '2.0',
+                    'id'      : None,
+                    'error'   : {'code': -32700, 'message':'Parse error'}
+                })
+                self.message = []
+                return
+
+            callid = rpcreq.get('id')
+            method = rpcreq.get('method', None)
+
+            if not isinstance(method, str) or method == '' or method not in self.server.args.rpc:
+                self.wsSendJsonMessage(self.WS_OPC_TEXT, {
+                    'jsonrpc' : '2.0',
+                    'id'      : callid,
+                    'error'   : {'code': -32601, 'message':'Method not found'}
+                })
+                self.message = []
+                return
+
+            self.wsSendJsonMessage(self.WS_OPC_TEXT, {
+                'jsonrpc' : '2.0',
+                'id'      : callid,
+                'result'  : self.server.args.rpc[method]
+            })
+
+            self.message = []
+
+    def wsSendMessage(self, opcode, message):
+        try:
+            self.request.send((0x80 + opcode).to_bytes(1, 'big'))
+            length = len(message)
+            if length <= 125:
+                self.request.send(length.to_bytes(1, 'big'))
+            elif length >= 126 and length <= 65535:
+                self.request.send(126)
+                self.request.send(struct.pack(">H", length))
+            else:
+                self.request.send(127)
+                self.request.send(struct.pack(">Q", length))
+            if length > 0:
+                self.request.send(message)
+        except Exception as e:
+            self.wsClose()
+
+    def wsSendJsonMessage(self, opcode, jsonmsg):
+        self.wsSendMessage(opcode, json.dumps(jsonmsg).encode('utf-8'))
+
+    def wsClose(self):
+        try:
+            if self.wsconnect:
+                self.wsconnect = False
+                try: 
+                    self.wsSendClose()
+                except:
+                    pass
+        finally:
+            pass
+
+    def wsSendClose(self):
+        msg = bytearray()
+        msg.append(0x80 + self.WS_OPC_CLOSE)
+        msg.append(0x00)
+        self.request.send(msg)
+
+    def onWsMessage(self):
+        pass
+
+if __name__ == '__main__':
+    app = Refractor()
+    app.runServer()

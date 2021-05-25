@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RPC HTTP TEST</title>
+</head>
+<body>
+    <div>Open Console</div>
+    <script>
+        fetch('/_api/rpc', {
+            body    : '{"jsonrpc": "2.0", "method": "User.Test", "params": [], "id": 1}',
+            headers : {
+                "Accept"       : "application/json",
+                "Content-Type" : "application/json"
+            },
+            method: "POST"
+        }).then(function(res){
+            res.json().then(function(data){
+                console.log(data);
+            });
+        });
+
+    </script>
+</body>
+</html>
