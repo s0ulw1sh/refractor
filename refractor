@@ -14,6 +14,7 @@ import subprocess
 from http.server import SimpleHTTPRequestHandler, HTTPServer
 from base64 import standard_b64encode
 from hashlib import sha1
+from http import HTTPStatus
 
 def defaultElmHtmlTemplate():
     return '''<!DOCTYPE html>
@@ -39,6 +40,7 @@ class Refractor(SimpleHTTPRequestHandler):
 
     args    = {}
     protocol_version = "HTTP/1.1"
+    server_version = "refractor/" + __version__
     
     WS_MAGICK       = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
     WS_OPC_CONTINUE = 0x0
@@ -206,27 +208,9 @@ class Refractor(SimpleHTTPRequestHandler):
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
         self.send_header('Pragma', 'no-cache')
         self.send_header('Expires', '0')
-        
-    def httpNotFound(self, message):
-        self.send_response(404)
-        self.send_header('Content-type', 'text/plain')
-        self.send_header('Content-Length', str(len(message)))
-        self.httpDisableCache()
-        self.send_header('Connection', 'close')
-        self.end_headers()
-        self.wfile.write(message)
 
-    def httpInternalError(self, message):
-        self.send_response(500)
-        self.send_header('Content-type', 'text/plain')
-        self.send_header('Content-Length', str(len(message)))
-        self.httpDisableCache()
-        self.send_header('Connection', 'close')
-        self.end_headers()
-        self.wfile.write(message)
-
-    def httpSendJson(self, data):
-        self.send_response(200)
+    def httpSendJson(self, data, status=200):
+        self.send_response(status)
         self.send_header('Content-type', 'application/json')
         self.send_header('Content-Length', str(len(data)))
         self.httpDisableCache()
@@ -271,18 +255,11 @@ class Refractor(SimpleHTTPRequestHandler):
             if path in self.server.args.http:
                 method = self.httpMethodToIndex(method)
                 if 0 in self.server.args.http[path]['methods'] or method in self.server.args.http[path]['methods']:
-                    data = json.dumps(self.server.args.http[path]['result']).encode('utf-8')
-                    self.send_response(200)
-                    self.send_header('Content-type', 'application/json')
-                    self.send_header('Content-Length', str(len(data)))
-                    self.httpDisableCache()
-                    self.send_header('Connection', 'close')
-                    self.end_headers()
-                    self.wfile.write(data)
+                    self.httpSendJson(self.server.args.http[path]['result'])
                 else:
-                    self.httpNotFound('Not Found'.encode('utf-8'))
+                    self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
             else:
-                self.httpNotFound('Not Found'.encode('utf-8'))
+                self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
 
             return True
         else:
@@ -306,7 +283,7 @@ class Refractor(SimpleHTTPRequestHandler):
                 self.wsReadMessages()
                 return True
             else:
-                self.httpNotFound('Not Found'.encode('utf-8'))
+                self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
                 return True
 
         return False
@@ -325,7 +302,7 @@ class Refractor(SimpleHTTPRequestHandler):
             cnlen = int(self.headers.get('Content-Length', 0))
             
             if cnlen == 0:
-                self.httpInternalError('Invalid content length'.encode('utf-8'))
+                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, 'Invalid content length')
                 return True
 
             post_data = self.rfile.read(cnlen).decode('utf-8')
@@ -369,14 +346,13 @@ class Refractor(SimpleHTTPRequestHandler):
         elmbasename  = os.path.basename(self.path)
         elmname, ext = os.path.splitext(elmbasename)
 
-
         if ext.lower() != '.elm':
             return False
 
         elmpath = os.path.join(self.server.args.cwd, self.path.strip('/'))
         
         if not os.path.isfile(elmpath):
-            self.httpNotFound("Elm File Not Found {}".format(self.path).encode('utf-8'))
+            self.send_error(HTTPStatus.NOT_FOUND, 'Elm File Not Found {}'.format(self.path))
             return True
 
         elmcmd = 'elm'
@@ -400,13 +376,17 @@ class Refractor(SimpleHTTPRequestHandler):
         try:
             out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         except Exception as e:
-            self.httpInternalError(str(e).encode('utf-8'))
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
             return True
 
         if out.returncode != 0:
-            self.httpInternalError(out.stdout)
+            self.send_response(500)
+            self.send_header('Content-type', 'text/plain')
+            self.send_header('Content-Length', str(len(out.stdout)))
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(out.stdout)
             return True
-
 
         template = self.server.args.template
 
@@ -494,7 +474,7 @@ class Refractor(SimpleHTTPRequestHandler):
         if self.httpCheckApi('POST'):
             return
 
-        self.httpNotFound('Not Found')
+        self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
 
     def do_PUT(self):
         self.path = self.path.split('?')[0]
@@ -502,7 +482,7 @@ class Refractor(SimpleHTTPRequestHandler):
         if self.httpCheckApi('PUT'):
             return
 
-        self.httpNotFound('Not Found')
+        self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
 
     def do_PATCH(self):
         self.path = self.path.split('?')[0]
@@ -510,7 +490,7 @@ class Refractor(SimpleHTTPRequestHandler):
         if self.httpCheckApi('PATCH'):
             return
 
-        self.httpNotFound('Not Found')
+        self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
 
     def do_DELETE(self):
         self.path = self.path.split('?')[0]
@@ -518,7 +498,7 @@ class Refractor(SimpleHTTPRequestHandler):
         if self.httpCheckApi('DELETE'):
             return
 
-        self.httpNotFound('Not Found')
+        self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
 
     ##   ## ####### ######   ####    ###     #### ###  ## ####### ######
     ##   ##  ##   #  ##  ## ##  ##  ## ##   ##  ## ##  ##  ##   # # ## #
