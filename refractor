@@ -15,6 +15,7 @@ from http.server import SimpleHTTPRequestHandler, HTTPServer
 from base64 import standard_b64encode
 from hashlib import sha1
 from http import HTTPStatus
+from string import Template
 
 def defaultElmHtmlTemplate():
     return '''<!DOCTYPE html>
@@ -22,16 +23,16 @@ def defaultElmHtmlTemplate():
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title}</title>
-    {styles}
+    <title>$title</title>
+    $styles
 </head>
 <body>
     <pre id="elm-mount"></pre>
-    {elmscript}
+    $elmscript
     <script>
-        {elmcode}
+        $elmcode
     </script>
-    {scripts}
+    $scripts
 </body>
 </html>
     '''
@@ -70,7 +71,7 @@ class Refractor(SimpleHTTPRequestHandler):
                                 required = False,
                                 default = 8000)
             cli.add_argument('-T', '--template',
-                                help = 'HTML template',
+                                help = 'HTML template, -T @ - prints the built-in template',
                                 required = False,
                                 default = '')
             cli.add_argument('-C', '--cmd',
@@ -84,17 +85,25 @@ class Refractor(SimpleHTTPRequestHandler):
             self.args.http = {}
             self.args.rpc  = {}
 
-            elmstuffdir = os.path.join(self.args.cwd, 'elm-stuff')
+            if self.args.template == '@':
+                print(defaultElmHtmlTemplate())
+                sys.exit(0)
 
-            if not os.path.isdir(elmstuffdir):
-                try:
-                    os.mkdir(elmstuffdir)
-                except OSError:
-                    logging.error("creation of the directory `elm-stuff` failed")
-                    sys.exit(-1)
-                except Exception as e:
-                    logging.error(e)
-                    sys.exit(-1)
+            self.args.elm  = os.path.isfile(os.path.join(self.args.cwd, 'elm.json'))
+
+            if self.args.elm:
+
+                elmstuffdir = os.path.join(self.args.cwd, 'elm-stuff')
+
+                if not os.path.isdir(elmstuffdir):
+                    try:
+                        os.mkdir(elmstuffdir)
+                    except OSError:
+                        logging.error("creation of the directory `elm-stuff` failed")
+                        sys.exit(-1)
+                    except Exception as e:
+                        logging.error(e)
+                        sys.exit(-1)
 
             jsonrefract    = os.path.join(self.args.cwd, 'refract.json')
 
@@ -349,6 +358,9 @@ class Refractor(SimpleHTTPRequestHandler):
         if ext.lower() != '.elm':
             return False
 
+        if not self.server.args.elm:
+            return False
+
         elmpath = os.path.join(self.server.args.cwd, self.path.strip('/'))
         
         if not os.path.isfile(elmpath):
@@ -374,7 +386,7 @@ class Refractor(SimpleHTTPRequestHandler):
         command.append(jsoutpath)
 
         try:
-            out = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            out = subprocess.run(command, capture_output=True, timeout=3)
         except Exception as e:
             self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(e))
             return True
@@ -382,10 +394,10 @@ class Refractor(SimpleHTTPRequestHandler):
         if out.returncode != 0:
             self.send_response(500)
             self.send_header('Content-type', 'text/plain')
-            self.send_header('Content-Length', str(len(out.stdout)))
+            self.send_header('Content-Length', str(len(out.stderr)))
             self.send_header('Connection', 'close')
             self.end_headers()
-            self.wfile.write(out.stdout)
+            self.wfile.write(out.stderr)
             return True
 
         template = self.server.args.template
@@ -425,8 +437,9 @@ class Refractor(SimpleHTTPRequestHandler):
             if isinstance(self.server.args.cfg['scripts'], list):
                 scripts = self.server.args.cfg['scripts'].copy()
 
+        tempalte = Template(tmpdata)
 
-        tmpdata = tmpdata.format(scripts = '\n'.join(scripts),
+        rendered = tempalte.safe_substitute(scripts = '\n'.join(scripts),
             styles    = '\n'.join(styles),
             title     = elmbasename,
             elmscript = '<script src="/elm-stuff/{}"></script>'.format(jsoutname),
@@ -434,11 +447,11 @@ class Refractor(SimpleHTTPRequestHandler):
 
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
-        self.send_header('Content-Length', str(len(tmpdata)))
+        self.send_header('Content-Length', str(len(rendered)))
         self.httpDisableCache()
         self.end_headers()
 
-        self.wfile.write(tmpdata)
+        self.wfile.write(rendered)
 
         return True
 
