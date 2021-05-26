@@ -1,16 +1,14 @@
 {
-    "styles":   [],
-    "scripts":  [],
-    "optimize": true,
-    "websocket": "/_api/ws",
-    "apipath": "/_api",
-    "apilist": [
-        {
-            "path"   : "GET::/user/test",
-            "call"   : "User.Test",
-            "result" : {"hello":"world"}
-        }
-    ],
+    "elm": {
+        "optimize": true
+    },
+    "template": {
+        "head":    ["<link name='123' />"],
+        "footer":  []
+    },
+    "api": {
+        "list": []
+    },
     "commands": {
         "build": [ "ls" ]
     } 

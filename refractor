@@ -24,15 +24,15 @@ def defaultElmHtmlTemplate():
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>$title</title>
-    $styles
+    $head
 </head>
 <body>
     <pre id="elm-mount"></pre>
+    $footer
     $elmscript
     <script>
         $elmcode
     </script>
-    $scripts
 </body>
 </html>
     '''
@@ -78,10 +78,23 @@ class Refractor(SimpleHTTPRequestHandler):
                                 help = 'Command',
                                 required = False,
                                 default = '')
+            cli.add_argument('-S', '--style',
+                                help = 'CSS Style file',
+                                required = False,
+                                default = '')
+            cli.add_argument('-J', '--js',
+                                help = 'JavaScript file',
+                                required = False,
+                                default = '')
 
             self.args      = cli.parse_args()
             self.args.cwd  = os.getcwd()
-            self.args.cfg  = {}
+            self.args.cfg  = {
+                'api'      :{},
+                'elm'      :{},
+                'template' :{},
+                'commands' :{}
+            }
             self.args.http = {}
             self.args.rpc  = {}
 
@@ -99,7 +112,7 @@ class Refractor(SimpleHTTPRequestHandler):
                     try:
                         os.mkdir(elmstuffdir)
                     except OSError:
-                        logging.error("creation of the directory `elm-stuff` failed")
+                        logging.error('creation of the directory `elm-stuff` failed')
                         sys.exit(-1)
                     except Exception as e:
                         logging.error(e)
@@ -126,8 +139,13 @@ class Refractor(SimpleHTTPRequestHandler):
                 os.chdir(cwd)
                 sys.exit(code)
 
-            if 'apilist' in self.args.cfg and isinstance(self.args.cfg['apilist'], list):
-                for item in self.args.cfg['apilist']:
+            if 'api' in self.args.cfg and isinstance(self.args.cfg['api'], dict):
+                
+                apilist = (self.args.cfg['api']['list']
+                            if 'list' in self.args.cfg['api'] and
+                            isinstance(self.args.cfg['api']['list'], list) else [])
+                
+                for item in apilist:
                     if isinstance(item, dict) and 'result' in item:
                         
                         if 'call' in item and isinstance(item['call'], str):
@@ -145,6 +163,8 @@ class Refractor(SimpleHTTPRequestHandler):
                                 'methods' : list(map(self.httpMethodToIndex, methods)),
                                 'result'  : item['result']
                             }
+            else:
+                self.args.cfg['api'] = {}
 
     def runCommand(self, cmd):
 
@@ -249,15 +269,12 @@ class Refractor(SimpleHTTPRequestHandler):
      ##  ## ##  ##  ##   # ##  ## ##  ##
       ####  ##  ## #######  #### ###  ##
 
-    def httpCheckApi(self, method='GET'):
-        apipath = '/_api'
+    def restCheckApi(self, method='GET'):
+        apipath = (self.server.args.cfg['api']['rest']
+                    if 'rest' in self.server.args.cfg['api'] else '/_api')
 
-        if 'apipath' in self.server.args.cfg:
-            if isinstance(self.server.args.cfg['apipath'], str) and self.validPath(self.server.args.cfg['apipath']):
-                apipath = self.server.args.cfg['apipath']
-            elif isinstance(self.server.args.cfg['apipath'], bool):
-                if self.server.args.cfg['apipath'] == False:
-                    return False
+        if not isinstance(apipath, str):
+            return False
 
         if self.path.startswith(apipath) and self.path != apipath:
             path = self.path.strip('/').strip(apipath)
@@ -275,14 +292,11 @@ class Refractor(SimpleHTTPRequestHandler):
             return False
 
     def wsCheckApi(self):
-        wspath = '/_api/ws'
+        wspath = (self.server.args.cfg['api']['ws']
+                    if 'ws' in self.server.args.cfg['api'] else '/_api/ws')
 
-        if 'websocket' in self.server.args.cfg:
-            if isinstance(self.server.args.cfg['websocket'], str) and self.validPath(self.server.args.cfg['websocket']):
-                wspath = self.server.args.cfg['websocket']
-            elif isinstance(self.server.args.cfg['websocket'], bool):
-                if self.server.args.cfg['websocket'] == False:
-                    return False
+        if not isinstance(wspath, str):
+            return False
 
         if wspath == self.path:
             upgrade = self.headers.get('Upgrade', None)
@@ -298,14 +312,11 @@ class Refractor(SimpleHTTPRequestHandler):
         return False
 
     def rpcCheckApi(self):
-        rpcpath = '/_api/rpc'
+        rpcpath = (self.server.args.cfg['api']['rpc']
+                    if 'rpc' in self.server.args.cfg['api'] else '/_api/rpc')
 
-        if 'rpc' in self.server.args.cfg:
-            if isinstance(self.server.args.cfg['rpc'], str) and self.validPath(self.server.args.cfg['rpc']):
-                rpcpath = self.server.args.cfg['rpc']
-            elif isinstance(self.server.args.cfg['rpc'], bool):
-                if self.server.args.cfg['rpc'] == False:
-                    return False
+        if not isinstance(rpcpath, str):
+            return False
 
         if rpcpath == self.path:
             cnlen = int(self.headers.get('Content-Length', 0))
@@ -367,17 +378,19 @@ class Refractor(SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, 'Elm File Not Found {}'.format(self.path))
             return True
 
-        elmcmd = 'elm'
+        elmcmd   = 'elm'
+        optimize = False
 
-        if 'elm' in self.server.args.cfg:
-            if isinstance(self.server.args.cfg['elm'], str):
-                elmcmd = self.server.args.cfg['elm']
+        if 'elm' in self.server.args.cfg and isinstance(self.server.args.cfg, dict):
+            optimize = ('optimize' in self.server.args.cfg['elm'] and
+                        isinstance(self.server.args.cfg['elm']['optimize'], bool) and
+                        self.server.args.cfg['elm']['optimize'] == True)
+            elmcmd   = self.server.args.cfg['elm'].get('path', 'elm')
 
         command = [elmcmd, 'make', elmpath]
 
-        if 'optimize' in self.server.args.cfg:
-            if type(self.server.args.cfg['optimize']) == type(True) and self.server.args.cfg['optimize'] == True:
-                command.append('--optimize')
+        if optimize:
+            command.append('--optimize')
 
         jsoutname = self.path.strip('/').replace('/', '_') + '.js'
         jsoutpath = os.path.join(self.server.args.cwd, 'elm-stuff', jsoutname)
@@ -401,10 +414,19 @@ class Refractor(SimpleHTTPRequestHandler):
             return True
 
         template = self.server.args.template
+        head     = []
+        footer   = []
 
-        if 'template' in self.server.args.cfg and isinstance(self.server.args.cfg['template'], str):
-            if self.server.args.cfg['template'] != '':
-                template = self.server.args.cfg['template']
+        if 'template' in self.server.args.cfg and isinstance(self.server.args.cfg['template'], dict):
+            template = (self.server.args.cfg['template']['path']
+                        if 'path' in self.server.args.cfg['template'] and
+                        isinstance(self.server.args.cfg['template']['path'], str) else self.server.args.template)
+            head     = (self.server.args.cfg['template']['head'].copy()
+                        if 'head' in self.server.args.cfg['template'] and
+                        isinstance(self.server.args.cfg['template']['head'], list) else [])
+            footer   = (self.server.args.cfg['template']['footer'].copy()
+                        if 'footer' in self.server.args.cfg['template'] and
+                        isinstance(self.server.args.cfg['template']['footer'], list) else [])
 
         tmpdata = ''
 
@@ -426,21 +448,10 @@ class Refractor(SimpleHTTPRequestHandler):
         else:
             tmpdata = defaultElmHtmlTemplate()
 
-        styles  = []
-        scripts = []
-
-        if 'styles' in self.server.args.cfg:
-            if isinstance(self.server.args.cfg['styles'], list):
-                styles = self.server.args.cfg['styles'].copy()
-
-        if 'scripts' in self.server.args.cfg:
-            if isinstance(self.server.args.cfg['scripts'], list):
-                scripts = self.server.args.cfg['scripts'].copy()
-
         tempalte = Template(tmpdata)
 
-        rendered = tempalte.safe_substitute(scripts = '\n'.join(scripts),
-            styles    = '\n'.join(styles),
+        rendered = tempalte.safe_substitute(head = '\n'.join(head),
+            footer    = '\n'.join(footer),
             title     = elmbasename,
             elmscript = '<script src="/elm-stuff/{}"></script>'.format(jsoutname),
             elmcode   = 'var elmapp = Elm.'+elmname+'.init( {node: document.getElementById("elm-mount")} );').encode('utf-8')
@@ -469,7 +480,7 @@ class Refractor(SimpleHTTPRequestHandler):
         if self.wsCheckApi():
             return
 
-        if self.httpCheckApi('GET'):
+        if self.restCheckApi('GET'):
             return
 
         if self.elmCheck():
@@ -484,7 +495,7 @@ class Refractor(SimpleHTTPRequestHandler):
         if self.rpcCheckApi():
             return
 
-        if self.httpCheckApi('POST'):
+        if self.restCheckApi('POST'):
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
@@ -492,7 +503,7 @@ class Refractor(SimpleHTTPRequestHandler):
     def do_PUT(self):
         self.path = self.path.split('?')[0]
 
-        if self.httpCheckApi('PUT'):
+        if self.restCheckApi('PUT'):
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
@@ -500,7 +511,7 @@ class Refractor(SimpleHTTPRequestHandler):
     def do_PATCH(self):
         self.path = self.path.split('?')[0]
 
-        if self.httpCheckApi('PATCH'):
+        if self.restCheckApi('PATCH'):
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
@@ -508,7 +519,7 @@ class Refractor(SimpleHTTPRequestHandler):
     def do_DELETE(self):
         self.path = self.path.split('?')[0]
 
-        if self.httpCheckApi('DELETE'):
+        if self.restCheckApi('DELETE'):
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
