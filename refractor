@@ -428,6 +428,12 @@ class Refractor(SimpleHTTPRequestHandler):
                         if 'footer' in self.server.args.cfg['template'] and
                         isinstance(self.server.args.cfg['template']['footer'], list) else [])
 
+        if self.server.args.style != '':
+            head.append('<link rel="stylesheet" href="{}">'.format(self.server.args.style))
+
+        if self.server.args.js != '':
+            footer.append('<script type="text/javascript" src="{}"></script>'.format(self.server.args.js))
+
         tmpdata = ''
 
         if template != '':
