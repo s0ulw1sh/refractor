@@ -13,7 +13,7 @@
         socket.addEventListener('open', function (event) {
             console.log('connected to ws');
 
-            socket.send('{"jsonrpc": "2.0", "method": "User.Test", "params": [], "id": 1}');
+            socket.send('{"jsonrpc": "2.0", "method": "Test.Self", "params": [], "id": 1}');
         });
 
         socket.addEventListener('close', function (event) {

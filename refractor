@@ -16,6 +16,7 @@ from base64 import standard_b64encode
 from hashlib import sha1
 from http import HTTPStatus
 from string import Template
+import struct
 
 def defaultElmHtmlTemplate():
     return '''<!DOCTYPE html>
@@ -90,13 +91,13 @@ class Refractor(SimpleHTTPRequestHandler):
             self.args      = cli.parse_args()
             self.args.cwd  = os.getcwd()
             self.args.cfg  = {
-                'api'      :{},
-                'elm'      :{},
-                'template' :{},
-                'commands' :{}
+                'api'      : {},
+                'elm'      : {},
+                'template' : {},
+                'commands' : {}
             }
-            self.args.http = {}
-            self.args.rpc  = {}
+            self.args.rest   = {}
+            self.args.rpc    = {}
 
             if self.args.template == '@':
                 print(defaultElmHtmlTemplate())
@@ -146,23 +147,55 @@ class Refractor(SimpleHTTPRequestHandler):
                             isinstance(self.args.cfg['api']['list'], list) else [])
                 
                 for item in apilist:
-                    if isinstance(item, dict) and 'result' in item:
-                        
-                        if 'call' in item and isinstance(item['call'], str):
-                            self.args.rpc[item['call']] = item['result']
+                    if isinstance(item, dict):
 
-                        if 'path' in item and isinstance(item['path'], str):
-                            try:
-                                methods, path = item['path'].split('::', maxsplit=2)
-                                methods = methods.split(',')
-                            except:
-                                path    = item['path']
-                                methods = ['ANY']
+                        if 'result' in item or 'error' in item or 'from' in item:
 
-                            self.args.http[path.strip('/')] = {
-                                'methods' : list(map(self.httpMethodToIndex, methods)),
-                                'result'  : item['result']
-                            }
+                            if 'from' in item:
+                                frompath = os.path.join(self.args.cwd, item['from'])
+                                
+                                try:
+                                    with open(frompath) as f:
+                                        result = json.load(f)
+                                        f.close()
+                                except Exception as e:
+                                    logging.error(e)
+                                    result = []
+
+                            else:
+                                result = (item['result'] if 'result' in item else {
+                                                                                    'code'  : 500,
+                                                                                    'error' : item['error']
+                                                                                  })
+
+                            if 'call' in item and isinstance(item['call'], str):
+                                self.args.rpc[item['call']] = result
+
+                            if 'path' in item and isinstance(item['path'], str):
+                                try:
+                                    methods, path = item['path'].split('::', maxsplit=2)
+                                    methods = methods.split(',')
+                                except:
+                                    path    = item['path']
+                                    methods = ['ANY']
+
+                                parts = path.strip('/').split('/')
+
+                                i    = 0
+                                part = ''
+                                
+                                for i, part in enumerate(parts):
+                                    if i not in self.args.rest:
+                                        self.args.rest[i]       = {}
+                                        self.args.rest[i][part] = None
+
+                                self.args.rest[i][part] = {}
+
+                                for m in methods:
+                                    self.args.rest[i][part][m] = result
+
+                              
+
             else:
                 self.args.cfg['api'] = {}
 
@@ -239,13 +272,14 @@ class Refractor(SimpleHTTPRequestHandler):
         self.send_header('Expires', '0')
 
     def httpSendJson(self, data, status=200):
+        bytesdata = json.dumps(data).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-type', 'application/json')
-        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Content-Length', str(len(bytesdata)))
         self.httpDisableCache()
         self.send_header('Connection', 'close')
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode('utf-8'))
+        self.wfile.write(bytesdata)
 
     def validPath(self, path):
         return len(path.strip().strip('/')) > 0
@@ -273,15 +307,41 @@ class Refractor(SimpleHTTPRequestHandler):
         apipath = (self.server.args.cfg['api']['rest']
                     if 'rest' in self.server.args.cfg['api'] else '/_api')
 
-        if not isinstance(apipath, str):
+        if not isinstance(apipath, str) or apipath == '':
             return False
 
         if self.path.startswith(apipath) and self.path != apipath:
-            path = self.path.strip('/').strip(apipath)
-            if path in self.server.args.http:
-                method = self.httpMethodToIndex(method)
-                if 0 in self.server.args.http[path]['methods'] or method in self.server.args.http[path]['methods']:
-                    self.httpSendJson(self.server.args.http[path]['result'])
+            path = self.path.strip(apipath).strip('/')
+
+            parts = path.split('/')
+
+            i = 0
+            part = ''
+
+            for i, part in enumerate(parts):
+                if i not in self.server.args.rest:
+                    self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
+                    break
+
+                if part not in self.server.args.rest[i]:
+                    if ':s' not in self.server.args.rest[i]:
+                        if part.isnumeric():
+                            if ':d' not in self.server.args.rest[i]:
+                                self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
+                                break
+                            else:
+                                part = ':d'
+                        else:
+                            self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
+                            break
+                    else:
+                        part = ':s'
+
+            if self.server.args.rest[i][part] is not None:
+                if 'ANY' in self.server.args.rest[i][part]:
+                    self.httpSendJson(self.server.args.rest[i][part]['ANY'])
+                elif method in self.server.args.rest[i][part]:
+                    self.httpSendJson(self.server.args.rest[i][part][method])
                 else:
                     self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
             else:
@@ -295,7 +355,7 @@ class Refractor(SimpleHTTPRequestHandler):
         wspath = (self.server.args.cfg['api']['ws']
                     if 'ws' in self.server.args.cfg['api'] else '/_api/ws')
 
-        if not isinstance(wspath, str):
+        if not isinstance(wspath, str) or wspath == '':
             return False
 
         if wspath == self.path:
@@ -315,7 +375,7 @@ class Refractor(SimpleHTTPRequestHandler):
         rpcpath = (self.server.args.cfg['api']['rpc']
                     if 'rpc' in self.server.args.cfg['api'] else '/_api/rpc')
 
-        if not isinstance(rpcpath, str):
+        if not isinstance(rpcpath, str) or rpcpath == '':
             return False
 
         if rpcpath == self.path:
@@ -640,15 +700,15 @@ class Refractor(SimpleHTTPRequestHandler):
 
     def wsSendMessage(self, opcode, message):
         try:
-            self.request.send((0x80 + opcode).to_bytes(1, 'big'))
+            self.request.send(struct.pack(">B", 0x80 + opcode))
             length = len(message)
             if length <= 125:
-                self.request.send(length.to_bytes(1, 'big'))
+                self.request.send(struct.pack(">B", length))
             elif length >= 126 and length <= 65535:
-                self.request.send(126)
+                self.request.send(struct.pack(">B", 126))
                 self.request.send(struct.pack(">H", length))
             else:
-                self.request.send(127)
+                self.request.send(struct.pack(">B", 127))
                 self.request.send(struct.pack(">Q", length))
             if length > 0:
                 self.request.send(message)
@@ -674,9 +734,6 @@ class Refractor(SimpleHTTPRequestHandler):
         msg.append(0x80 + self.WS_OPC_CLOSE)
         msg.append(0x00)
         self.request.send(msg)
-
-    def onWsMessage(self):
-        pass
 
 if __name__ == '__main__':
     app = Refractor()

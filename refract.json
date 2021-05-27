@@ -7,7 +7,21 @@
         "footer":  []
     },
     "api": {
-        "list": []
+        "list": [
+            {
+                "path": "/test",
+                "result": {"1":"2"}
+            },
+            {
+                "path": "/test/get/:d",
+                "result": {"test":"digit"}
+            },
+            {
+                "call": "Test.Self",
+                "path": "/test/get/self",
+                "from": "refract.json"
+            }
+        ]
     },
     "commands": {
         "build": [ "ls" ]
