@@ -44,6 +44,7 @@ class Refractor(SimpleHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "refractor/" + __version__
     
+    wsmessage       = []
     WS_MAGICK       = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
     WS_OPC_CONTINUE = 0x0
     WS_OPC_TEXT     = 0x1
@@ -51,6 +52,25 @@ class Refractor(SimpleHTTPRequestHandler):
     WS_OPC_CLOSE    = 0x8
     WS_OPC_PING     = 0x9
     WS_OPC_PONG     = 0xa
+
+    httpMIME = {
+        '.js'     : 'application/javascript; charset=utf-8',
+        '.json'   : 'application/json; charset=utf-8',
+        '.jsonld' : 'application/ld+json; charset=utf-8',
+        '.csv'    : 'text/csv',
+        '.xml'    : 'application/xml',
+        '.pdf'    : 'application/pdf',
+        '.css'    : 'text/css; charset=utf-8',
+        '.html'   : 'text/html; charset=utf-8',
+        '.htm'    : 'text/html; charset=utf-8',
+        '.gif'    : 'image/gif',
+        '.png'    : 'image/png',
+        '.jpg'    : 'image/jpeg',
+        '.jpeg'   : 'image/jpeg',
+        '.svg'    : 'image/svg+xml; charset=utf-8',
+        '.webp'   : 'image/webp',
+        '.ogg'    : 'application/ogg'
+    }
 
     def __init__(self, request=None, client_address=None, server=None):
         if request != None:
@@ -541,26 +561,8 @@ class Refractor(SimpleHTTPRequestHandler):
     ##  ##   ##     ##    ##
     ##  ##  ####   ####  ####
 
-    httpMIME = {
-        '.js'     : 'application/javascript; charset=utf-8',
-        '.json'   : 'application/json; charset=utf-8',
-        '.jsonld' : 'application/ld+json; charset=utf-8',
-        '.csv'    : 'text/csv',
-        '.xml'    : 'application/xml',
-        '.pdf'    : 'application/pdf',
-        '.css'    : 'text/css; charset=utf-8',
-        '.html'   : 'text/html; charset=utf-8',
-        '.htm'    : 'text/html; charset=utf-8',
-        '.gif'    : 'image/gif',
-        '.png'    : 'image/png',
-        '.jpg'    : 'image/jpeg',
-        '.jpeg'   : 'image/jpeg',
-        '.svg'    : 'image/svg+xml; charset=utf-8',
-        '.webp'   : 'image/webp',
-        '.ogg'    : 'application/ogg'
-    }
-
     def do_GET(self):
+
         self.path = self.path.split('?')[0]
 
         if self.wsCheckApi():
@@ -577,11 +579,22 @@ class Refractor(SimpleHTTPRequestHandler):
         static = os.path.join(self.server.args.cwd, self.path.strip('/'))
 
         if os.path.isdir(static):
-            super().do_GET()
+            try:
+                super().do_GET()
+            except:
+                pass
             return
 
         if not os.path.isfile(static):
-            self.send_error(HTTPStatus.NOT_FOUND, 'Not Found')
+            try:
+                self.send_response(404)
+                self.send_header('Content-Type', 'text/plain')
+                self.send_header('Content-Length', '9')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write('Not found'.encode('utf-8'))
+            except:
+                pass
             return
 
         _, ext = os.path.splitext(static)
@@ -705,8 +718,11 @@ class Refractor(SimpleHTTPRequestHandler):
             for char in self.rfile.read(msglen):
                 decoded += chr(char ^ masks[len(decoded) % 4])
 
-            self.message = []
             self.wsOnMessage(decoded)
+
+            if self.opcode == self.WS_OPC_TEXT or self.opcode == WS_OPC_BIN:
+                self.wsmessage.clear()
+
         except Exception as e:
             if self.wsconnect:
                 raise Exception(e)
@@ -723,14 +739,14 @@ class Refractor(SimpleHTTPRequestHandler):
         elif self.opcode == self.WS_OPC_PONG:
             pass
         elif self.opcode == self.WS_OPC_BIN:
-            self.message = []
+            return
         elif self.opcode == self.WS_OPC_CONTINUE:
-            self.message.append(message)
+            self.wsmessage.append(message)
         elif self.opcode == self.WS_OPC_TEXT:
-            self.message.append(message)
-            
+            self.wsmessage.append(message)
+
             try:
-                rpcreq = json.loads(''.join(self.message))
+                rpcreq = json.loads(''.join(self.wsmessage))
             except Exception as e:
                 rpcreq = False
 
@@ -740,7 +756,6 @@ class Refractor(SimpleHTTPRequestHandler):
                     'id'      : None,
                     'error'   : {'code': -32700, 'message':'Parse error'}
                 })
-                self.message = []
                 return
 
             callid = rpcreq.get('id')
@@ -752,7 +767,6 @@ class Refractor(SimpleHTTPRequestHandler):
                     'id'      : callid,
                     'error'   : {'code': -32601, 'message':'Method not found'}
                 })
-                self.message = []
                 return
 
             self.wsSendJsonMessage(self.WS_OPC_TEXT, {
@@ -760,8 +774,6 @@ class Refractor(SimpleHTTPRequestHandler):
                 'id'      : callid,
                 'result'  : self.server.args.rpc[method]
             })
-
-            self.message = []
 
     def wsSendMessage(self, opcode, message):
         try:

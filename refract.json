@@ -13,6 +13,7 @@
                 "result": {"1":"2"}
             },
             {
+                "call": "Test.Test",
                 "path": "/test/get/:d",
                 "result": {"test":"digit"}
             },
