@@ -75,12 +75,14 @@ class Refractor(SimpleHTTPRequestHandler):
 
     def __init__(self, request=None, client_address=None, server=None):
         if request != None:
-            super().__init__(request, client_address, server)
+            super().__init__(request, client_address, server, directory=server.args.cwd)
         else:
             logging.basicConfig(
                 level   = logging.INFO,
                 format  = '%(asctime)s [%(levelname)s] : %(message)s',
                 datefmt = '%Y-%m-%d %H:%M:%S')
+
+            cwd = os.getcwd()
 
             cli = argparse.ArgumentParser(
                                 description = 'Refractor web server for Elm project')
@@ -108,9 +110,18 @@ class Refractor(SimpleHTTPRequestHandler):
                                 help     = 'JavaScript file',
                                 required = False,
                                 default  = '')
+            cli.add_argument('-W', '--workdir',
+                                help     = 'Working directory',
+                                required = False,
+                                default  = cwd)
 
             self.args      = cli.parse_args()
-            self.args.cwd  = os.getcwd()
+
+            if self.args.workdir != cwd:
+                if not os.path.isabs(self.args.workdir):
+                    self.args.workdir = os.path.abspath(self.args.workdir)
+
+            self.args.cwd  = self.args.workdir
             self.args.cfg  = {
                 'api'      : {},
                 'elm'      : {},
