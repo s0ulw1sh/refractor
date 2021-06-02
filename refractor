@@ -722,15 +722,19 @@ class Refractor(SimpleHTTPRequestHandler):
             except:
                 pass
         elif self.opcode == self.WS_OPC_PING:
+            logging.info('WS RECV <== <PING>')
             self.wsSendMessage(self.WS_OPC_PONG, message)
         elif self.opcode == self.WS_OPC_PONG:
             pass
         elif self.opcode == self.WS_OPC_BIN:
+            logging.info('WS RECV <== <BINARY>')
             return
         elif self.opcode == self.WS_OPC_CONTINUE:
             self.wsmessage.append(message)
         elif self.opcode == self.WS_OPC_TEXT:
             self.wsmessage.append(message)
+
+            logging.info('WS RECV <== {}'.format(''.join(self.wsmessage)))
 
             try:
                 rpcreq = json.loads(''.join(self.wsmessage))
@@ -776,6 +780,7 @@ class Refractor(SimpleHTTPRequestHandler):
                 self.request.send(struct.pack('>Q', length))
             if length > 0:
                 self.request.send(message)
+                logging.info('WS SEND ==> {}'.format(message.decode('utf-8')))
         except Exception as e:
             self.wsClose()
 
