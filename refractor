@@ -151,7 +151,7 @@ class Refractor(SimpleHTTPRequestHandler):
                         logging.error(e)
                         sys.exit(-1)
 
-            jsonrefract    = os.path.join(self.args.cwd, 'refract.json')
+            jsonrefract    = os.path.join(cwd, 'refract.json')
 
             if os.path.isfile(jsonrefract):
                 try:
@@ -166,6 +166,8 @@ class Refractor(SimpleHTTPRequestHandler):
                     sys.exit(-1)
             else:
                 return
+
+            logging.info("refract.json found and loaded")
 
             if self.args.cmd != '':
                 cwd  = os.getcwd()
